@@ -138,7 +138,65 @@ int main() {
         //
         // Use SOFT_LIMIT_PERCENT and HARD_LIMIT_PERCENT to parameterize the green and red
         // line positions.
-        camera.setCameraCenter({player.position.x, WINDOW_HEIGHT * 0.5f});
+
+        /**
+         * Camera tracking (x-axis only). Zones are defined relative to the WINDOW:
+         *   dead zone : between the green lines      -> camera doesn't move
+         *   soft zone : between green and red lines  -> camera eases toward the player
+         *   hard zone : beyond the red lines         -> camera snaps so the player is ON the red line
+         *
+         * Each frame we convert the player's world position to a window percent
+         * (worldToWindowPercent), so the zone lines are just SOFT_LIMIT_PERCENT and
+         * HARD_LIMIT_PERCENT. In the soft zone we move the camera by
+         * SOFT_CAMERA_ALPHA * overshoot (an exponential moving average: close a fixed
+         * fraction of the remaining gap each frame, so it eases out). Then we re-measure
+         * and apply the full remaining overshoot past the red lines, which guarantees
+         * the player's center never crosses them. Soft runs first, hard runs last.
+         */
+        /**
+         * AI disclosure: I used Claude (Anthropic) as a tutor while doing this lab.
+         * It walked me through the idea and structure of camera.h and the camera
+         * logic in main.cpp step by step, and helped me debug my CMake/WSL build
+         * setup. I typed and tested the code myself, ran it to confirm the camera
+         * behavior, and removed my temporary test function afterward.
+         */
+        /**
+         * Reflection:
+         * - Coordinate systems: a camera is an anchor (the world point under the
+         *   window center) plus a scale. Conversions measure the offset from the
+         *   anchor, rescale it, and add the other anchor. Points need the anchor;
+         *   deltas only need the rescale.
+         * - Normalizing helps: working in window percent made the zone lines
+         *   resolution-independent and turned the logic into simple comparisons.
+         * - EMA easing: s += alpha * (target - s) needs no extra state and gives
+         *   smooth, damped motion because the step shrinks as the gap shrinks.
+         * - Order of operations: soft nudge first, then re-measure, then hard clamp,
+         *   so the hard limit always has the final say.
+         * - Process: testing with a scale other than 1 catches bugs that would
+         *   otherwise pass silently, and I learned to configure CMake before building.
+         */
+        float px = camera.worldToWindowPercent(player.position).x;  // player's screen x, 0..1
+        float leftSoft = SOFT_LIMIT_PERCENT;
+        float rightSoft = 1.f - SOFT_LIMIT_PERCENT;
+
+        float overshoot = 0.f;  // how far past the violated green line, as a window percent
+        if (px < leftSoft) {
+            overshoot = px - leftSoft;       // negative: player is left of the line
+        } else if (px > rightSoft) {
+            overshoot = px - rightSoft;      // positive: player is right of the line
+        }
+        camera.translateWindowPercent({SOFT_CAMERA_ALPHA * overshoot, 0.f});
+
+        // Hard limit: the player's center must never pass the red lines.
+        float leftHard = HARD_LIMIT_PERCENT;
+        float rightHard = 1.f - HARD_LIMIT_PERCENT;
+
+        px = camera.worldToWindowPercent(player.position).x;  // re-measure after the soft nudge
+        if (px < leftHard) {
+            camera.translateWindowPercent({px - leftHard, 0.f});   // negative: camera moves left
+        } else if (px > rightHard) {
+            camera.translateWindowPercent({px - rightHard, 0.f});  // positive: camera moves right
+        }
 
         worldView.setCenter(camera.getCameraCenter());
         window.clear(sf::Color::Black);
